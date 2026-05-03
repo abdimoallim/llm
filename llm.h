@@ -759,7 +759,6 @@ static char* llm__build_openai_request(llm_client_t* c, llm_request_t* r) {
   }
   if (r->stream) {
     llm__buf_append(&b, ",\"stream\":true", 14);
-    llm__buf_append(&b, ",\"stream_options\":{\"include_usage\":true}", 39);
   }
   if (r->json_mode)
     llm__buf_append(&b, ",\"response_format\":{\"type\":\"json_object\"}", 40);
@@ -1283,6 +1282,8 @@ typedef struct {
   double* first_token_time_out;
   double request_start_ms;
   int* chunk_count_out;
+  llm__buf_t* error_buf_unused;
+  bool* is_error_unused;
 } llm__stream_ctx_t;
 
 static void llm__stream_record_first(llm__stream_ctx_t* ctx) {
@@ -1518,29 +1519,108 @@ static llm_error_t llm__do_request(llm_client_t* c, llm_request_t* r,
   curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, c->verify_ssl ? 2L : 0L);
   if (c->proxy)
     curl_easy_setopt(curl, CURLOPT_PROXY, c->proxy);
-  if (r->stream) {
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, llm__stream_write);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &sctx);
-  } else {
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, llm__curl_write);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, rbuf);
-  }
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, llm__curl_write);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, rbuf);
   CURLcode res = curl_easy_perform(curl);
   long http_status = 0;
   curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status);
-  llm__buf_free(&sctx.leftover);
   curl_slist_free_all(headers);
   curl_easy_cleanup(curl);
   free(body);
   if (status_out)
     *status_out = http_status;
   LLM__LOG_DEBUG(c, "HTTP status: %ld", http_status);
-  if (!r->stream && rbuf->buffer)
+  if (rbuf->buffer)
     LLM__LOG_TRACE(c, "Response body: %s", rbuf->buffer);
   if (res == CURLE_OPERATION_TIMEDOUT)
     return LLM_ERR_TIMEOUT;
   if (res != CURLE_OK)
     return LLM_ERR_CURL;
+  if (r->stream && (http_status == 200 || http_status == 201) && rbuf->buffer &&
+      rbuf->size > 0) {
+    const char* p = rbuf->buffer;
+    while (*p) {
+      const char* nl = strchr(p, '\n');
+      size_t llen = nl ? (size_t)(nl - p) : strlen(p);
+      char line[4096];
+      if (llen >= sizeof(line))
+        llen = sizeof(line) - 1;
+      memcpy(line, p, llen);
+      line[llen] = '\0';
+      char* l = line;
+      while (*l == '\r')
+        l++;
+      if (*l != '\0' && strncmp(l, "data: ", 6) == 0) {
+        const char* json = l + 6;
+        if (strcmp(json, "[DONE]") == 0) {
+          if (sctx.cb)
+            sctx.cb(NULL, true, sctx.user_data);
+        } else if (prov == LLM_PROVIDER_ANTHROPIC) {
+          char* type = llm__json_get_string(json, "type");
+          if (type) {
+            if (strcmp(type, "content_block_delta") == 0) {
+              char* dobj = llm__json_get_nested(json, "delta");
+              if (dobj) {
+                char* dt = llm__json_get_string(dobj, "text");
+                if (dt && strlen(dt) > 0) {
+                  llm__stream_record_first(&sctx);
+                  if (sctx.cb)
+                    sctx.cb(dt, false, sctx.user_data);
+                }
+                free(dt);
+                free(dobj);
+              }
+            } else if (strcmp(type, "message_stop") == 0) {
+              if (sctx.cb)
+                sctx.cb(NULL, true, sctx.user_data);
+            }
+            free(type);
+          }
+        } else if (prov == LLM_PROVIDER_COHERE) {
+          char* et = llm__json_get_string(json, "event_type");
+          if (et) {
+            if (strcmp(et, "text-generation") == 0) {
+              char* text = llm__json_get_string(json, "text");
+              if (text) {
+                llm__stream_record_first(&sctx);
+                if (sctx.cb)
+                  sctx.cb(text, false, sctx.user_data);
+                free(text);
+              }
+            } else if (strcmp(et, "stream-end") == 0) {
+              if (sctx.cb)
+                sctx.cb(NULL, true, sctx.user_data);
+            }
+            free(et);
+          }
+        } else {
+          char* choices = llm__json_get_nested(json, "choices");
+          if (choices) {
+            char* c0 = llm__json_array_get(choices, 0);
+            free(choices);
+            if (c0) {
+              char* delta = llm__json_get_nested(c0, "delta");
+              free(c0);
+              if (delta) {
+                char* content = llm__json_get_string(delta, "content");
+                free(delta);
+                if (content && strlen(content) > 0) {
+                  llm__stream_record_first(&sctx);
+                  if (sctx.cb)
+                    sctx.cb(content, false, sctx.user_data);
+                }
+                free(content);
+              }
+            }
+          }
+        }
+      }
+      if (!nl)
+        break;
+      p = nl + 1;
+    }
+  }
+  llm__buf_free(&sctx.leftover);
   return LLM_OK;
 }
 
@@ -1592,7 +1672,8 @@ static llm_response_t* llm_complete(llm_client_t* c, llm_request_t* r) {
       attempt++;
       continue;
     }
-    if (http_status != 200 && http_status != 201) {
+    if (http_status != 200 && http_status != 201 &&
+        !(r->stream && http_status == 0)) {
       resp->error = llm__http_status_to_error(http_status);
       if (rbuf.buffer) {
         resp->error_message = llm__json_get_string(rbuf.buffer, "message");
@@ -1616,9 +1697,9 @@ static llm_response_t* llm_complete(llm_client_t* c, llm_request_t* r) {
         llm__parse_anthropic_response(rbuf.buffer, resp);
       else
         llm__parse_openai_response(rbuf.buffer, resp);
-      if (!resp->model && c->model)
-        resp->model = llm__strdup(c->model);
     }
+    if (!resp->model && c->model)
+      resp->model = llm__strdup(c->model);
     llm__buf_free(&rbuf);
     break;
   }
