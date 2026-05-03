@@ -761,7 +761,7 @@ static char* llm__build_openai_request(llm_client_t* c, llm_request_t* r) {
     llm__buf_append(&b, ",\"stream\":true", 14);
   }
   if (r->json_mode)
-    llm__buf_append(&b, ",\"response_format\":{\"type\":\"json_object\"}", 40);
+    llm__buf_append(&b, ",\"response_format\":{\"type\":\"json_object\"}", 41);
   if (r->json_schema) {
     llm__buf_append(
         &b,
@@ -787,7 +787,7 @@ static char* llm__build_openai_request(llm_client_t* c, llm_request_t* r) {
         llm__buf_append(&b, ",", 1);
       char* fn = llm__json_escape(r->tools[i].function.name);
       char* fd = llm__json_escape(r->tools[i].function.description);
-      llm__buf_append(&b, "{\"type\":\"function\",\"function\":{\"name\":", 36);
+      llm__buf_append(&b, "{\"type\":\"function\",\"function\":{\"name\":", 38);
       llm__buf_append(&b, fn, strlen(fn));
       llm__buf_append(&b, ",\"description\":", 15);
       llm__buf_append(&b, fd, strlen(fd));
@@ -813,7 +813,7 @@ static char* llm__build_openai_request(llm_client_t* c, llm_request_t* r) {
   bool first = true;
   if (r->system) {
     char* sc = llm__json_escape(r->system);
-    llm__buf_append(&b, "{\"role\":\"system\",\"content\":", 26);
+    llm__buf_append(&b, "{\"role\":\"system\",\"content\":", 27);
     llm__buf_append(&b, sc, strlen(sc));
     llm__buf_append(&b, "}", 1);
     free(sc);
@@ -869,7 +869,7 @@ static char* llm__build_openai_request(llm_client_t* c, llm_request_t* r) {
         llm__buf_append(&b, "{\"id\":", 6);
         llm__buf_append(&b, tid, strlen(tid));
         llm__buf_append(&b,
-                        ",\"type\":\"function\",\"function\":{\"name\":", 36);
+                        ",\"type\":\"function\",\"function\":{\"name\":", 39);
         llm__buf_append(&b, tn, strlen(tn));
         llm__buf_append(&b, ",\"arguments\":", 13);
         llm__buf_append(&b, tae, strlen(tae));
@@ -970,7 +970,7 @@ static char* llm__build_anthropic_request(llm_client_t* c, llm_request_t* r) {
       bool fc = true;
       if (m->content) {
         char* ct = llm__json_escape(m->content);
-        llm__buf_append(&b, "{\"type\":\"text\",\"text\":", 21);
+        llm__buf_append(&b, "{\"type\":\"text\",\"text\":", 22);
         llm__buf_append(&b, ct, strlen(ct));
         llm__buf_append(&b, "}", 1);
         free(ct);
@@ -985,7 +985,7 @@ static char* llm__build_anthropic_request(llm_client_t* c, llm_request_t* r) {
         const char* inp = m->tool_calls[j].arguments_json
                               ? m->tool_calls[j].arguments_json
                               : "{}";
-        llm__buf_append(&b, "{\"type\":\"tool_use\",\"id\":", 23);
+        llm__buf_append(&b, "{\"type\":\"tool_use\",\"id\":", 24);
         llm__buf_append(&b, tid, strlen(tid));
         llm__buf_append(&b, ",\"name\":", 8);
         llm__buf_append(&b, tn, strlen(tn));
@@ -999,7 +999,7 @@ static char* llm__build_anthropic_request(llm_client_t* c, llm_request_t* r) {
     } else if (m->role == LLM_ROLE_TOOL) {
       char* tid = llm__json_escape(m->tool_call_id ? m->tool_call_id : "");
       char* ct = llm__json_escape(m->content ? m->content : "");
-      llm__buf_append(&b, "[{\"type\":\"tool_result\",\"tool_use_id\":", 36);
+      llm__buf_append(&b, "[{\"type\":\"tool_result\",\"tool_use_id\":", 37);
       llm__buf_append(&b, tid, strlen(tid));
       llm__buf_append(&b, ",\"content\":", 11);
       llm__buf_append(&b, ct, strlen(ct));
