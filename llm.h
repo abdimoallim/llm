@@ -869,7 +869,7 @@ static char* llm__build_openai_request(llm_client_t* c, llm_request_t* r) {
         llm__buf_append(&b, "{\"id\":", 6);
         llm__buf_append(&b, tid, strlen(tid));
         llm__buf_append(&b,
-                        ",\"type\":\"function\",\"function\":{\"name\":", 39);
+                        ",\"type\":\"function\",\"function\":{\"name\":", 38);
         llm__buf_append(&b, tn, strlen(tn));
         llm__buf_append(&b, ",\"arguments\":", 13);
         llm__buf_append(&b, tae, strlen(tae));
